@@ -4,14 +4,14 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web",
-    "build": "npx expo export:web --output-dir web-build",
-    "vercel-build": "npx expo export:web --output-dir web-build",
-    "preview": "npx serve web-build"
-  },
+  "start": "expo start",
+  "android": "expo run:android",
+  "ios": "expo run:ios",
+  "web": "expo start --web",
+  "build": "expo export:web",
+  "vercel-build": "expo export:web",
+  "preview": "npx serve web-build"
+},
   "dependencies": {
     "@expo/metro-runtime": "~5.0.4",
     "@react-native-async-storage/async-storage": "^2.1.2",
