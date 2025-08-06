@@ -2,13 +2,15 @@
   "name": "inventory-tracker",
   "version": "1.0.0",
   "main": "index.js",
+  "private": true,
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build": "expo build:web",
-    "vercel-build": "expo build:web"
+    "build": "npx expo export:web --output-dir web-build",
+    "vercel-build": "npx expo export:web --output-dir web-build",
+    "preview": "npx serve web-build"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.4",
@@ -42,7 +44,6 @@
   "engines": {
     "node": "22.x",
     "npm": "10.x"
-  },
-  "private": true
+  }
 }
 
