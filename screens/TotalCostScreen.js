@@ -5,13 +5,22 @@ import {
   StyleSheet,
   ActivityIndicator,
   FlatList,
+  TextInput,
+  Dimensions,
   Linking,
   TouchableOpacity,
-  TextInput,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
+
+const screenWidth = Dimensions.get('window').width;
+
+const numColumns = screenWidth > 800 ? 5 : screenWidth > 600 ? 4 : screenWidth > 400 ? 3 : 2;
+
+const boxSpacing = 6;
+const boxSize = (screenWidth - (numColumns + 1) * boxSpacing) / numColumns;
 
 const pricingChart = [
   { sellingPrice: 1, maxCost: 0.3 },
@@ -33,297 +42,500 @@ function isWorthIt(cost) {
   return getSellingPrice(cost) !== null;
 }
 
-function calculateOrderQuantity(quantity) {
-  const restockThreshold = 10;
-  if (quantity < restockThreshold) {
-    return restockThreshold - quantity;
+function calculateOrderQuantity(item) {
+  const restockAt = item.restockAt ?? 10;
+  const unitsPerPack = item.unitsPerPack ?? 1;
+  if (item.quantity < restockAt) {
+    const neededUnits = restockAt - item.quantity;
+    return {
+      packsToOrder: Math.ceil(neededUnits / unitsPerPack),
+      unitsToOrder: neededUnits,
+    };
   }
-  return 0;
+  return { packsToOrder: 0, unitsToOrder: 0 };
 }
+
+const STORE_FILTERS = ['All', 'Costco', 'Amazon', "Sam's", 'Coke'];
 
 export default function TotalCostScreen() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-
   const [searchText, setSearchText] = useState('');
-  const [filterTag, setFilterTag] = useState(null);
+  const [selectedStore, setSelectedStore] = useState('All');
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'inventory'),
-      (snapshot) => {
-        const inventoryItems = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            name: data.name ?? 'Unnamed',
-            quantity: data.quantity ?? 0,
-            cost: data.cost ?? 0,
-            tags: data.tags ?? [],
-            urls: data.urls ?? {},
-          };
-        });
-        setItems(inventoryItems);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching inventory:', error);
-        setLoading(false);
-      }
-    );
+    const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
+      const inventoryItems = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name ?? 'Unnamed',
+          quantity: data.quantity ?? 0,
+          costCostco: Number(data.costCostco) || 0,
+          costAmazon: Number(data.costAmazon) || 0,
+          costSams: Number(data.costSams) || 0,
+          costSelected: data.costSelected ?? 'costCostco',
+          restockAt: data.restockAt ?? 10,
+          unitsPerPack: data.unitsPerPack > 0 ? data.unitsPerPack : 1,
+          urls: data.urls ?? {},
+        };
+      });
+      setItems(inventoryItems);
+      setLoading(false);
+    });
 
     return () => unsubscribe();
   }, []);
 
-  const allTagsSet = new Set();
-  items.forEach((item) => {
-    (item.tags || []).forEach((tag) => allTagsSet.add(tag));
-  });
-  const allTags = Array.from(allTagsSet).sort();
+  const storeToCostKey = {
+    Costco: 'costCostco',
+    Amazon: 'costAmazon',
+    "Sam's": 'costSams',
+    Coke: 'coke',
+  };
 
   const filteredItems = useMemo(() => {
+    const costKey = storeToCostKey[selectedStore];
+
     return items.filter((item) => {
-      const matchesTag = filterTag ? item.tags.includes(filterTag) : true;
-      const matchesSearch = item.name
-        .toLowerCase()
-        .includes(searchText.toLowerCase());
-      return matchesTag && matchesSearch;
+      const nameMatch = item.name.toLowerCase().includes(searchText.toLowerCase());
+      if (!nameMatch) return false;
+
+      if (selectedStore === 'All') return true;
+
+      if (selectedStore === 'Coke') {
+        return !!item.urls?.coke;
+      }
+
+      return item.costSelected === costKey && (item[costKey] || 0) > 0;
     });
-  }, [items, filterTag, searchText]);
+  }, [items, searchText, selectedStore]);
 
-  if (loading) {
-    return (
-      <View style={[styles.center, { backgroundColor: '#121212' }]}>
-        <ActivityIndicator size="large" color="#60a5fa" />
-      </View>
-    );
-  }
+  const totalRestockCost = useMemo(() => {
+    let total = 0;
+    filteredItems.forEach((item) => {
+      let cost = 0;
 
-  const totalRestockCost = filteredItems.reduce((sum, item) => {
-    const orderQty = calculateOrderQuantity(item.quantity);
-    return sum + orderQty * item.cost;
-  }, 0);
+      switch (selectedStore) {
+        case 'Costco':
+          cost = Number(item.costCostco) || 0;
+          break;
+        case 'Amazon':
+          cost = Number(item.costAmazon) || 0;
+          break;
+        case "Sam's":
+          cost = Number(item.costSams) || 0;
+          break;
+        case 'Coke':
+          cost = 0;
+          break;
+        case 'All':
+        default:
+          cost = Number(item.costSelected && item[item.costSelected]) || 0;
+          break;
+      }
+
+      const unitsPerPack = item.unitsPerPack > 0 ? item.unitsPerPack : 1;
+      const { packsToOrder } = calculateOrderQuantity(item);
+      if (packsToOrder > 0) {
+        total += packsToOrder * (cost * unitsPerPack);
+      }
+    });
+    return total;
+  }, [filteredItems, selectedStore]);
+
+  const storeColors = {
+    Costco: '#fbbf24',  // gold
+    Amazon: '#fb923c',  // orange
+    "Sam's": '#14b8a6', // teal
+    Coke: '#ef4444',    // red
+    Unknown: '#94a3b8', // gray
+  };
 
   const renderItem = ({ item }) => {
-    const sellingPrice = getSellingPrice(item.cost);
-    const orderQty = calculateOrderQuantity(item.quantity);
-    const worthIt = isWorthIt(item.cost);
+    let cost = 0;
+    let costSourceKey = '';
+
+    switch (selectedStore) {
+      case 'Costco':
+        cost = Number(item.costCostco) || 0;
+        costSourceKey = 'costCostco';
+        break;
+      case 'Amazon':
+        cost = Number(item.costAmazon) || 0;
+        costSourceKey = 'costAmazon';
+        break;
+      case "Sam's":
+        cost = Number(item.costSams) || 0;
+        costSourceKey = 'costSams';
+        break;
+      case 'Coke':
+        cost = 0;
+        costSourceKey = null;
+        break;
+      case 'All':
+      default:
+        costSourceKey = item.costSelected;
+        cost = Number(costSourceKey && item[costSourceKey]) || 0;
+        break;
+    }
+
+    const unitsPerPack = item.unitsPerPack > 0 ? item.unitsPerPack : 1;
+
+    const storeNameMap = {
+      costCostco: 'Costco',
+      costAmazon: 'Amazon',
+      costSams: "Sam's",
+    };
+
+    const urlMap = {
+      costCostco: item.urls?.costco,
+      costAmazon: item.urls?.amazon,
+      costSams: item.urls?.sams,
+      coke: item.urls?.coke,
+    };
+
+    const costSourceLabel = costSourceKey ? storeNameMap[costSourceKey] || 'Unknown' : '';
+    const priceUrl = selectedStore === 'Coke' ? urlMap.coke : costSourceKey ? urlMap[costSourceKey] : null;
+
+    const sellingPrice = getSellingPrice(cost) ?? 0;
+    const worthIt = isWorthIt(cost);
+    const { packsToOrder, unitsToOrder } = calculateOrderQuantity(item);
+    const needsRestock = packsToOrder > 0;
+    const totalRestockCostItem = packsToOrder * (cost * unitsPerPack);
+
+    // Determine color for store name label
+    const storeColor = storeColors[costSourceLabel] || storeColors.Unknown;
 
     return (
-      <View style={styles.itemContainer}>
-        <Text style={styles.itemName}>{item.name}</Text>
-        <View style={styles.row}>
-          <Text style={styles.text}>Stock: {item.quantity}</Text>
-          <Text style={styles.text}>Cost: ${item.cost.toFixed(2)}</Text>
-          <Text style={styles.text}>
-            Selling Price:{' '}
-            {sellingPrice !== null ? `$${sellingPrice.toFixed(2)}` : 'N/A'}
-          </Text>
-        </View>
-        <View style={styles.row}>
-          <Text style={styles.text}>Order Qty: {orderQty}</Text>
-          <Text
-            style={[
-              styles.text,
-              { color: worthIt ? '#22c55e' : '#ef4444', fontWeight: 'bold' },
-            ]}
-          >
-            {worthIt ? 'Worth it' : 'Not worth it'}
-          </Text>
-        </View>
-        <View style={styles.urlsRow}>
-          {item.urls.costco && (
-            <TouchableOpacity
-              onPress={() => Linking.openURL(item.urls.costco)}
-              style={styles.urlButton}
-            >
-              <Text style={styles.urlText}>Costco</Text>
+      <View
+        style={[
+          styles.iconBox,
+          { backgroundColor: needsRestock ? '#334155' : '#1e293b' },
+        ]}
+      >
+        <Text style={styles.itemName} numberOfLines={1} ellipsizeMode="tail">
+          {item.name}
+        </Text>
+
+        {selectedStore === 'Coke' ? (
+          priceUrl ? (
+            <TouchableOpacity onPress={() => Linking.openURL(priceUrl)}>
+              <Text style={styles.linkText}>View Link ↗</Text>
             </TouchableOpacity>
-          )}
-          {item.urls.amazon && (
-            <TouchableOpacity
-              onPress={() => Linking.openURL(item.urls.amazon)}
-              style={styles.urlButton}
+          ) : (
+            <Text style={[styles.costText, { fontStyle: 'italic', color: '#94a3b8' }]}>
+              No URL
+            </Text>
+          )
+        ) : (
+          <>
+            <Text style={styles.restockText}>Restock @ {item.restockAt}</Text>
+
+            {priceUrl ? (
+              <TouchableOpacity onPress={() => Linking.openURL(priceUrl)}>
+                <Text style={[styles.storeLinkText, { color: storeColor }]}>
+                  From: {costSourceLabel} ↗
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[styles.storeName, { color: storeColor }]}>
+                From: {costSourceLabel}
+              </Text>
+            )}
+
+            <Text style={styles.costText}>Cost: ${cost.toFixed(2)}</Text>
+
+            <Text style={styles.sellText}>Sell: ${sellingPrice.toFixed(2)}</Text>
+
+            <Text
+              style={[styles.worthText, { color: worthIt ? '#22c55e' : '#ef4444' }]}
             >
-              <Text style={styles.urlText}>Amazon</Text>
-            </TouchableOpacity>
-          )}
-          {item.urls.sams && (
-            <TouchableOpacity
-              onPress={() => Linking.openURL(item.urls.sams)}
-              style={styles.urlButton}
-            >
-              <Text style={styles.urlText}>Sam's</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+              {worthIt ? '✔ Worth It' : '✘ Not Worth It'}
+            </Text>
+
+            <Text style={styles.quantityText}>
+              Qty: {item.quantity} | Units/Pack: {unitsPerPack}
+            </Text>
+
+            {needsRestock ? (
+              <View style={styles.orderContainer}>
+                <View style={styles.orderRow}>
+                  <View style={styles.orderBadge}>
+                    <Text style={styles.orderBadgeLabel}>Packs</Text>
+                    <Text style={styles.orderBadgeValue}>{packsToOrder}</Text>
+                  </View>
+                  <View style={styles.orderBadge}>
+                    <Text style={styles.orderBadgeLabel}>Units</Text>
+                    <Text style={styles.orderBadgeValue}>{unitsToOrder}</Text>
+                  </View>
+                </View>
+                <Text style={styles.totalCostText}>
+                  Total: ${totalRestockCostItem.toFixed(2)}
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.stockSufficientText}>Stock sufficient</Text>
+            )}
+          </>
+        )}
       </View>
     );
   };
 
   return (
     <View style={styles.container}>
-
-      {/* SEARCH BAR */}
-      <View style={styles.searchContainer}>
-        <TextInput
-          placeholder="Search items..."
-          placeholderTextColor="#94a3b8"
-          value={searchText}
-          onChangeText={setSearchText}
-          style={styles.searchInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
-      </View>
-
-      {/* TAG FILTER */}
-      <View style={styles.filterWrapper}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 8 }}
-        >
-          <TouchableOpacity
-            style={[
-              styles.filterButton,
-              filterTag === null && styles.filterButtonActive,
-            ]}
-            onPress={() => setFilterTag(null)}
-          >
-            <Text
-              style={[
-                styles.filterButtonText,
-                filterTag === null && styles.filterButtonTextActive,
-              ]}
-            >
-              All
-            </Text>
-          </TouchableOpacity>
-          {allTags.map((tag) => (
-            <TouchableOpacity
-              key={tag}
-              style={[
-                styles.filterButton,
-                filterTag === tag && styles.filterButtonActive,
-              ]}
-              onPress={() => setFilterTag(tag)}
-            >
-              <Text
-                style={[
-                  styles.filterButtonText,
-                  filterTag === tag && styles.filterButtonTextActive,
-                ]}
-              >
-                {tag}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      {/* TOTAL COST */}
-      <Text style={styles.totalCostText}>
-        Cost: ${totalRestockCost.toFixed(2)}
-      </Text>
-
-      {/* ITEM LIST */}
       <FlatList
         data={filteredItems}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        numColumns={numColumns}
+        columnWrapperStyle={styles.row}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterContainer}
+              style={{ marginBottom: 6 }}
+            >
+              {STORE_FILTERS.map((store) => (
+                <TouchableOpacity
+                  key={store}
+                  style={[
+                    styles.filterButton,
+                    selectedStore === store && styles.filterButtonActive,
+                  ]}
+                  onPress={() => setSelectedStore(store)}
+                >
+                  <Text
+                    style={[
+                      styles.filterText,
+                      selectedStore === store && styles.filterTextActive,
+                    ]}
+                  >
+                    {store}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.totalCostBar}>
+              <Text style={styles.totalCostLabel}>Total Restock Cost:</Text>
+              <Text style={styles.totalCostValue}>${totalRestockCost.toFixed(2)}</Text>
+            </View>
+
+            <TextInput
+              style={styles.searchBar}
+              placeholder="Search items..."
+              placeholderTextColor="#94a3b8"
+              value={searchText}
+              onChangeText={setSearchText}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {loading ? (
+              <ActivityIndicator size="large" color="#60a5fa" />
+            ) : filteredItems.length === 0 ? (
+              <Text style={styles.noResultsText}>No items found.</Text>
+            ) : null}
+          </>
+        }
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#121212' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
-  searchContainer: {
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#334155', // dark border
-    borderRadius: 12,
+  container: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+    paddingTop: 40,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#1e293b', // dark input bg
   },
-  searchInput: {
-    fontSize: 16,
-    color: 'white',
-  },
-
-  filterWrapper: {
-    height: 40,
-    marginBottom: 16,
+  filterContainer: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
   },
   filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: '#334155', // dark slate
+    backgroundColor: '#1e293b',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
     marginHorizontal: 4,
+    borderWidth: 1,
+    borderColor: '#475569',
+    minWidth: 70,
     justifyContent: 'center',
     alignItems: 'center',
   },
   filterButtonActive: {
-    backgroundColor: '#2563eb', // bright blue accent
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
-  filterButtonText: {
-    color: '#94a3b8', // lighter gray
+  filterText: {
+    color: '#94a3b8',
     fontWeight: '600',
-  },
-  filterButtonTextActive: {
-    color: 'white',
-  },
-
-  totalCostText: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 16,
+    fontSize: 14,
     textAlign: 'center',
-    color: '#60a5fa', // bright accent
   },
-
-  itemContainer: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155', // subtle dark border
-    paddingVertical: 12,
-  },
-  itemName: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 6,
+  filterTextActive: {
     color: 'white',
   },
-  row: {
+  totalCostBar: {
+    backgroundColor: '#1e293b',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    alignItems: 'center',
   },
-  text: {
-    fontSize: 14,
-    color: '#cbd5e1', // light gray text
-  },
-  urlsRow: {
-    flexDirection: 'row',
-    marginTop: 6,
-  },
-  urlButton: {
-    marginRight: 12,
-    backgroundColor: '#2563eb', // bright blue button
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 5,
-  },
-  urlText: {
-    color: 'white',
+  totalCostLabel: {
+    color: '#94a3b8',
+    fontSize: 16,
     fontWeight: '600',
+  },
+  totalCostValue: {
+    color: '#60a5fa',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  searchBar: {
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'web' ? 8 : 12,
+    color: 'white',
+    fontSize: Platform.OS === 'web' ? 14 : 16,
+    marginBottom: 10,
+  },
+  listContent: {
+    paddingBottom: 100,
+    paddingTop: 6,
+  },
+  noResultsText: {
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 30,
+    fontSize: 16,
+  },
+  row: {
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    paddingHorizontal: boxSpacing / 2,
+  },
+  iconBox: {
+    width: boxSize,
+    height: boxSize * 1.25,
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderColor: '#475569',
+    borderWidth: 1,
+  },
+  itemName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'white',
+    textAlign: 'center',
+  },
+  restockText: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  costText: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    textAlign: 'center',
+  },
+  storeName: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  storeLinkText: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 2,
+    textDecorationLine: 'underline',
+    textAlign: 'center',
+  },
+  linkText: {
+    color: '#60a5fa',
+    fontSize: 12,
+    marginTop: 2,
+    textAlign: 'center',
+    textDecorationLine: 'underline',
+  },
+  sellText: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    textAlign: 'center',
+  },
+  worthText: {
     fontSize: 14,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  quantityText: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  orderContainer: {
+    marginTop: 6,
+    alignItems: 'center',
+    width: '100%',
+  },
+  orderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingHorizontal: 10,
+  },
+  orderBadge: {
+    flexDirection: 'row',
+    backgroundColor: '#2563eb',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginVertical: 2,
+    minWidth: 60,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  orderBadgeLabel: {
+    color: '#dbeafe',
+    fontWeight: '600',
+    marginRight: 6,
+    fontSize: 12,
+  },
+  orderBadgeValue: {
+    color: 'white',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  totalCostText: {
+    color: '#93c5fd',
+    fontWeight: '700',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  stockSufficientText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#64748b',
+    fontStyle: 'italic',
   },
 });
 

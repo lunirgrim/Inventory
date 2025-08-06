@@ -24,7 +24,7 @@ export default function AnalyticsScreen() {
     return () => unsubscribe();
   }, []);
 
-  // Analytics computations:
+  // Summary Metrics
   const totalItems = items.length;
   const totalQuantity = items.reduce((sum, i) => sum + (i.quantity || 0), 0);
   const totalValue = items.reduce(
@@ -34,6 +34,22 @@ export default function AnalyticsScreen() {
   const restockCount = items.filter(
     (i) => (i.restockAt !== null && i.quantity < i.restockAt)
   ).length;
+  const totalCapacity = items.reduce(
+    (sum, i) => sum + (i.fullCapacity || 0),
+    0
+  );
+
+  // Packs Needed Calculation
+  const packsNeededData = items
+    .filter((i) => i.fullCapacity && i.unitsPerPack && i.unitsPerPack > 0)
+    .map((i) => ({
+      name: i.name,
+      packsNeeded: Math.ceil((i.fullCapacity - (i.quantity || 0)) / i.unitsPerPack),
+    }))
+    .filter((i) => i.packsNeeded > 0);
+
+  const packsNeededLabels = packsNeededData.map(i => i.name.slice(0, 5));
+  const packsNeededValues = packsNeededData.map(i => i.packsNeeded);
 
   // Quantity by Tag (Bar Chart)
   const tagQuantityMap = {};
@@ -59,20 +75,20 @@ export default function AnalyticsScreen() {
     else nonProfitableCount++;
   });
 
-  // Dark mode chart config:
+  // Chart Theme (Dark)
   const chartConfig = {
     backgroundGradientFrom: '#121212',
     backgroundGradientTo: '#121212',
     decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(96, 165, 250, ${opacity})`, // bright blue
-    labelColor: (opacity = 1) => `rgba(203, 213, 225, ${opacity})`, // light gray-blue labels
+    color: (opacity = 1) => `rgba(96, 165, 250, ${opacity})`,
+    labelColor: (opacity = 1) => `rgba(203, 213, 225, ${opacity})`,
     style: {
       borderRadius: 16,
     },
     propsForDots: {
       r: '5',
       strokeWidth: '2',
-      stroke: '#60a5fa', // bright blue
+      stroke: '#60a5fa',
     },
   };
 
@@ -95,6 +111,10 @@ export default function AnalyticsScreen() {
         <View style={styles.summaryCard}>
           <Text style={styles.summaryNumber}>{restockCount}</Text>
           <Text style={styles.summaryLabel}>Need Restock</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryNumber}>{totalCapacity}</Text>
+          <Text style={styles.summaryLabel}>Total Capacity</Text>
         </View>
       </View>
 
@@ -169,6 +189,26 @@ export default function AnalyticsScreen() {
       ) : (
         <Text style={styles.emptyText}>No data available</Text>
       )}
+
+      {/* Packs Needed Chart */}
+      <Text style={styles.chartTitle}>Packs Needed to Reach Capacity</Text>
+      {packsNeededLabels.length > 0 ? (
+        <BarChart
+          data={{
+            labels: packsNeededLabels,
+            datasets: [{ data: packsNeededValues }],
+          }}
+          width={screenWidth - 32}
+          height={220}
+          chartConfig={chartConfig}
+          verticalLabelRotation={45}
+          fromZero
+          showValuesOnTopOfBars
+          style={styles.chart}
+        />
+      ) : (
+        <Text style={styles.emptyText}>No items with valid unit/pack/capacity</Text>
+      )}
     </ScrollView>
   );
 }
@@ -176,21 +216,22 @@ export default function AnalyticsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212', // dark background
+    backgroundColor: '#121212',
     paddingHorizontal: 16,
     paddingTop: 20,
   },
   summaryContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     marginBottom: 24,
   },
   summaryCard: {
-    flex: 1,
-    backgroundColor: '#1e1e1e', // dark card bg
+    width: '47%',
+    backgroundColor: '#1e1e1e',
     borderRadius: 16,
     paddingVertical: 16,
-    marginHorizontal: 6,
+    marginVertical: 6,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.5,
@@ -201,11 +242,11 @@ const styles = StyleSheet.create({
   summaryNumber: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#60a5fa', // bright blue
+    color: '#60a5fa',
   },
   summaryLabel: {
     fontSize: 14,
-    color: '#94a3b8', // lighter gray-blue
+    color: '#94a3b8',
     marginTop: 4,
     fontWeight: '600',
     textAlign: 'center',
@@ -213,9 +254,10 @@ const styles = StyleSheet.create({
   chartTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#e0e0e0', // light text
+    color: '#e0e0e0',
     marginBottom: 12,
     marginLeft: 6,
+    marginTop: 12,
   },
   chart: {
     marginVertical: 8,
