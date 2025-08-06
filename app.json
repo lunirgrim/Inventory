@@ -29,9 +29,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "bundler": "webpack",                        // ✅ REQUIRED for expo export:web
+      "bundler": "webpack",
       "build": {
-        "publicPath": "./"                         // ✅ GOOD for GitHub Pages & Netlify
+        "publicPath": "./"
       }
     },
     "updates": {
