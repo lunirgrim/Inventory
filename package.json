@@ -6,7 +6,8 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build": "expo export:web"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.4",
@@ -17,7 +18,7 @@
     "@react-navigation/bottom-tabs": "^6.5.17",
     "@react-navigation/native": "^6.1.14",
     "@react-navigation/native-stack": "^6.9.22",
-    "expo": "^53.0.20",
+    "expo": "^50.0.21",
     "expo-status-bar": "^2.2.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -35,6 +36,10 @@
     "@babel/core": "^7.20.0",
     "@expo/webpack-config": "^19.0.1",
     "webpack-dev-server": "^4.15.2"
+  },
+  "engines": {
+    "node": "18.x",
+    "npm": "9.x"
   },
   "private": true
 }
